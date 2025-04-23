@@ -28,9 +28,10 @@
       ></McIntroduction>
       <McPrompt
         :list="introPrompt.list"
+        :selectedValue="selectedExtension?.value"
         :direction="introPrompt.direction"
         class="intro-prompt"
-        @itemClick="onSubmit($event.label)"
+        @itemClick="handleToolBarClick($event)"
       ></McPrompt>
     </McLayoutContent>
     <McLayoutContent class="content-container" v-else>
@@ -39,10 +40,11 @@
     <div class="shortcut" style="display: flex; align-items: center; gap: 8px">
       <McPrompt
         v-if="!startPage"
-        :list="simplePrompt"
+        :list="introPrompt.list"
+        :selectedValue="selectedExtension?.value"
         :direction="'horizontal'"
         style="flex: 1"
-        @itemClick="onSubmit($event.label)"
+        @itemClick="handleToolBarClick($event)"
       ></McPrompt>
       <Button
         style="margin-left: auto"
@@ -89,12 +91,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { Button } from "vue-devui/button";
 import "vue-devui/button/style.css";
+import { MessageRole, MessageStatus, MessageType } from "./api/type";
 import MessageList from "./components/message/MessageList.vue";
 import { useConversationStore } from "./stores/conversation";
-import { MessageType, MessageStatus } from "./stores/conversation";
+import { getAIAnswer } from "./utils/chat";
+
+import McPrompt from "./components/Prompt/Prompt.vue";
+
+import BackgroundService from "./services/background";
+import { addMessage } from "./api";
+
+const backgroundService = new BackgroundService();
 
 const conversationStore = useConversationStore();
 const startPage = ref(conversationStore.startPage);
@@ -108,6 +118,7 @@ watch(
 );
 
 const inputValue = ref("");
+const selectedExtension = ref<any>(null);
 const description = [
   "MateChat 可以辅助研发人员编码、查询知识和相关作业信息、编写文档等。",
   "作为AI模型，MateChat 提供的答案可能不总是确定或准确的，但您的反馈可以帮助 MateChat 做的更好。",
@@ -121,22 +132,33 @@ const introPrompt = {
   direction: "horizontal",
   list: [
     {
-      value: "quickSort",
-      label: "帮我写一个快速排序",
+      value: "createTicket",
+      label: "创建出差申请单",
+      extentionName: "SQ01填写出差申请单",
       iconConfig: { name: "icon-info-o", color: "#5e7ce0" },
-      desc: "使用 js 实现一个快速排序",
+      messageSendBoxPlaceholder: "输入出差关键信息，自动创建出差申请单",
     },
     {
-      value: "helpMd",
-      label: "你可以帮我做些什么？",
+      value: "companyRule",
+      label: "公司规章制度",
       iconConfig: { name: "icon-star", color: "rgb(255, 215, 0)" },
-      desc: "了解当前大模型可以帮你做的事",
+      extentionName: "RAG01公司规章制度",
+      messageSendBoxPlaceholder:
+        "输入公司规章制度关键信息，自动查询公司规章制度",
     },
     {
-      value: "bindProjectSpace",
-      label: "怎么绑定项目空间",
+      value: "expenseReport",
+      label: "差旅报销单",
+      extentionName: "BX01差旅报销单相关信息描述",
       iconConfig: { name: "icon-priority", color: "#3ac295" },
-      desc: "如何绑定云空间中的项目",
+      messageSendBoxPlaceholder: "输入差旅报销单关键信息，自动查询差旅报销单",
+    },
+    {
+      value: "queryTicket",
+      label: "查询单据",
+      extentionName: "SEARCH01查询用户的单据",
+      iconConfig: { name: "icon-priority", color: "#3ac295" },
+      messageSendBoxPlaceholder: "输入查询关键信息，自动查询申请单",
     },
   ],
 };
@@ -153,34 +175,56 @@ const simplePrompt = [
   },
 ];
 
+const backgroundInfo = ref("");
+
+onMounted(async () => {
+  backgroundInfo.value = await backgroundService.getBackground();
+});
+
+const handleToolBarClick = (evt: any) => {
+  // 如果点击的工具与当前选中的工具相同，则取消选中
+  if (selectedExtension.value?.extentionName === evt.extentionName) {
+    selectedExtension.value = null;
+    conversationStore.currentQueryClassName = "";
+    return;
+  }
+
+  // 选中工具
+  selectedExtension.value = evt;
+  conversationStore.currentQueryClassName = evt.extentionName;
+};
+
 const newConversation = () => {
   conversationStore.createNewConversation();
 };
 
 const onSubmit = (evt: any) => {
+  debugger;
   if (!evt) return;
   let content = typeof evt === "string" ? evt : inputValue.value;
   inputValue.value = "";
 
   if (!content.trim()) return;
 
+  // If there's no current conversation, create one
+  if (!conversationStore.currentConversation) {
+    conversationStore.createNewConversation();
+  }
+
   // Create user message
   const userMessage = {
     csessionid:
       conversationStore.currentConversation?.id || Date.now().toString(),
     ccontent: content,
-    crole: "user" as "user",
+    crole: MessageRole.USER,
     ctype: MessageType.COMMON,
     cstatus: MessageStatus.SENDING,
+    loading: false,
   };
 
   // Add message to store
   conversationStore.addMessage(userMessage);
-
-  // If there's no current conversation, create one
-  if (!conversationStore.currentConversation) {
-    conversationStore.createNewConversation();
-  }
+  addMessage(userMessage);
 
   // Simulate an assistant response (this would be replaced with actual API call)
   setTimeout(() => {
@@ -188,18 +232,48 @@ const onSubmit = (evt: any) => {
     userMessage.cstatus = MessageStatus.SUCCESS;
 
     // Create assistant message
-    const assistantMessage = {
-      csessionid:
-        conversationStore.currentConversation?.id || Date.now().toString(),
-      ccontent: `你好，我收到了你的消息: "${content}"`,
-      crole: "assistant" as "assistant",
-      ctype: MessageType.MARKDOWN,
-      cstatus: MessageStatus.SUCCESS,
-    };
+    // const assistantMessage = {
+    //   csessionid:
+    //     conversationStore.currentConversation?.id || Date.now().toString(),
+    //   ccontent: `你好，我收到了你的消息: "${content}"`,
+    //   crole: "assistant" as "assistant",
+    //   ctype: MessageType.MARKDOWN,
+    //   cstatus: MessageStatus.SUCCESS,
+    // };
 
     // Add response to store
-    conversationStore.addMessage(assistantMessage);
-  }, 1000);
+    // conversationStore.addMessage(assistantMessage);
+    getAIAnswer(
+      {
+        inputs: {
+          data: JSON.stringify({
+            backgroundInfo: backgroundInfo.value,
+          }),
+          ext: conversationStore.currentQueryClassName,
+        },
+        query: content,
+      },
+      ({
+        messageData,
+        messageType,
+      }: {
+        messageData: any;
+        messageType: string;
+      }) => {
+        debugger;
+        conversationStore.addMessage({
+          ccontent: messageData,
+          crole: MessageRole.ASSISTANT,
+          ctype: messageType as MessageType,
+          cstatus: MessageStatus.SUCCESS,
+          loading: false,
+        });
+        // 调用markdownElement中暴露出的方法
+      }
+    );
+  }, 100);
+
+  // 调用markdownElement中暴露出的方法
 };
 </script>
 

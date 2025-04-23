@@ -1,8 +1,6 @@
 <template>
   <div class="common-element-wrapper">
-    <div class="content">
-      {{ message.ccontent }}
-    </div>
+    <div class="content" v-html="message.ccontent"></div>
   </div>
 </template>
 

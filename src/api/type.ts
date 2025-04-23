@@ -28,9 +28,16 @@ export enum MessageRole {
 // Message interface
 export interface Message {
     ccontentid?: string;
-    csessionid: string;
+    csessionid?: string;
     ccontent: string;
     crole: MessageRole | 'user' | 'assistant';
     ctype: MessageType;
     cstatus: MessageStatus;
+    loading?: boolean;
 } 
+
+export interface Conversation {
+  id: string
+  title: string
+  createdAt: Date
+}

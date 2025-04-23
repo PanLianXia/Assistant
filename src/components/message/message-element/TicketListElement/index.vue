@@ -63,11 +63,7 @@ import { ref, computed, onMounted, watch } from "vue";
 // @ts-ignore
 import CommonCard from "./CommonCard.vue";
 import type { Message } from "../../../../api/type";
-
-// Importing the ticket query module with dynamic import to avoid require
-// @ts-ignore
-import queryTicketsModule from "~/workflow/query/queryTickets.js";
-const queryTickets = new queryTicketsModule();
+import { queryTicketList } from "../../../../api";
 
 // Types for the component
 interface TicketItem {
@@ -168,9 +164,7 @@ const getTicketList = async () => {
   queryError.value = null;
 
   try {
-    const ticketListResult = await queryTickets.queryTicketList(
-      queryParams.value
-    );
+    const ticketListResult = await queryTicketList(queryParams.value);
 
     // Emit query params change
     emit("query-change", { ...queryParams.value });
@@ -263,7 +257,7 @@ declare global {
 <style scoped lang="scss">
 .ticket-list-element-wrapper {
   min-width: 270px;
-  padding: 16px 24px;
+  // padding: 16px 24px;
   font-size: 14px;
   box-sizing: border-box;
   .title {

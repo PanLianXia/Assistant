@@ -2,9 +2,11 @@
   <div class="message-item" :class="messageClass">
     <!-- User Message -->
     <McBubble
+      :id="'msg-' + message.ccontentid"
       v-if="message.crole === 'user'"
       :content="message.ccontent"
       :align="'right'"
+      :loading="message.loading"
       :avatarConfig="{
         imgSrc: 'https://matechat.gitcode.com/png/demo/userAvatar.svg',
       }"
@@ -24,7 +26,9 @@
 
     <!-- Assistant Message -->
     <McBubble
+      :id="'msg-' + message.ccontentid"
       v-else-if="message.crole === 'assistant'"
+      :loading="message.loading"
       :avatarConfig="{ imgSrc: 'https://matechat.gitcode.com/logo.svg' }"
     >
       <!-- Dynamic component based on message type -->

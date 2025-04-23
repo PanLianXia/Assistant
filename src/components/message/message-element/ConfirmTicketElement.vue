@@ -54,7 +54,7 @@
       <button
         class="btn-item"
         :class="{ disabled: confirmBtnDisabled }"
-        @click="saveTicket"
+        @click="handleSaveTicket"
       >
         {{ confirmBtnText }}
       </button>
@@ -65,7 +65,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from "vue";
 import { useConversationStore } from "../../../stores/conversation";
-import { addMessage } from "../../../api/index";
+import { addMessage, saveTicket } from "../../../api/index";
 import {
   MessageStatus,
   MessageType,
@@ -168,75 +168,117 @@ const generateTicketConfirmData = (templateJson: any, formData: any) => {
   return result;
 };
 
-const saveTicket = async () => {
+const handleSaveTicket = async () => {
   if (confirmBtnDisabled.value) return;
 
   confirmBtnDisabled.value = true;
   let ticketData = messageContent.value.formData;
+  let tipMessage = "生单中...";
+  let saveTicketResult = null;
 
-  window.$bus.$emit("saveTicket", {
-    ticketData,
-    callback: (res: any) => {
-      // 更新确认卡片消息内容
-      const updateMessage: Message = {
-        ...props.message,
-        ccontent: JSON.stringify({
-          ...messageContent.value,
-          saveTicketResult: !!(res && res.cguid),
-        }),
+  try {
+    saveTicketResult = await saveTicket(ticketData);
+    tipMessage =
+      saveTicketResult && saveTicketResult.cguid ? "生单成功" : "生单失败";
+    console.log(saveTicketResult);
+  } catch (error) {
+    const returnMsg = error.header?.returnmsg;
+    tipMessage = returnMsg || "生单失败";
+    const errorMessage: Message = {
+      ccontent: tipMessage,
+      crole: MessageRole.ASSISTANT,
+      ctype: MessageType.COMMON,
+      cstatus: MessageStatus.SUCCESS,
+      loading: false,
+    };
+    conversationStore.addMessage(errorMessage);
+    addMessage(errorMessage);
+  } finally {
+    // 更新确认卡片消息内容
+    const updateMessage: Message = {
+      ...props.message,
+      ccontent: JSON.stringify({
+        ...messageContent.value,
+        saveTicketResult: !!(saveTicketResult && saveTicketResult.cguid),
+      }),
+    };
+
+    const updateMessageIndex = currentMessageList.value.findIndex(
+      (item: any) => item.ccontentid === props.message.ccontentid
+    );
+
+    // Update the message in the store
+    const updatedMessages = [...currentMessageList.value];
+    updatedMessages[updateMessageIndex] = updateMessage;
+    conversationStore.clearMessages();
+    updatedMessages.forEach((msg) => conversationStore.addMessage(msg));
+
+    addMessage(updateMessage);
+
+    if (saveTicketResult && saveTicketResult.cguid) {
+      confirmBtnText.value = "已生单";
+      // 单据创建成功后可跳转到单据详情
+      const { cpageid, cpagetemplateid } = messageContent.value;
+
+      const tipMessage: Message = {
+        ccontentid: new Date().getTime() + "",
+        ccontent: `已成功创建${showData.value.category}, 请<a id="ticket-${saveTicketResult.cguid}" style="color: #3181ff;" href="javascript:void(0);" data-cpageid="${cpageid}" data-cpagetemplateid="${cpagetemplateid}" data-cpagetemplatename="${showData.value.category}" data-cguid="${saveTicketResult.cguid}" class="ticket-link">点击</a>查看详情`,
+        crole: MessageRole.ASSISTANT,
+        ctype: MessageType.TIP,
+        cstatus: MessageStatus.SUCCESS,
+        loading: false,
       };
+      conversationStore.addMessage(tipMessage);
+      addMessage(tipMessage);
 
-      const updateMessageIndex = currentMessageList.value.findIndex(
-        (item: any) => item.ccontentid === props.message.ccontentid
-      );
-
-      // Update the message in the store
-      const updatedMessages = [...currentMessageList.value];
-      updatedMessages[updateMessageIndex] = updateMessage;
-      conversationStore.clearMessages();
-      updatedMessages.forEach((msg) => conversationStore.addMessage(msg));
-
-      addMessage(updateMessage);
-
-      if (res && res.cguid) {
-        confirmBtnText.value = "已生单";
-        // 单据创建成功后可跳转到单据详情
-        const { cpageid, cpagetemplateid } = messageContent.value;
-
-        window.$bus.$emit("pushMessageList", {
-          id: new Date().getTime(),
-          type: MessageType.TIP,
-          role: MessageRole.ASSISTANT,
-          isMine: false,
-          content: `已成功创建${showData.value.category}, 请<a id="ticket-${res.cguid}" style="color: #3181ff;" href="javascript:void(0);" data-cpageid="${cpageid}" data-cpagetemplateid="${cpagetemplateid}" data-cpagetemplatename="${showData.value.category}" data-cguid="${res.cguid}" class="ticket-link">点击</a>查看详情`,
-          status: MessageStatus.SUCCESS,
-          csessionid: props.message.csessionid,
-          crole: MessageRole.ASSISTANT,
-          ccontent: `已成功创建${showData.value.category}`,
-        });
-
-        nextTick(() => {
-          addTicketLinkListener(res.cguid);
-        });
-      } else {
-        confirmBtnDisabled.value = false;
-        confirmBtnText.value = "生单失败";
-      }
-    },
-  });
+      // 使用nextTick确保DOM已更新，然后使用重试机制添加事件监听
+      nextTick(() => {
+        // 在nextTick回调中再添加监听是为了确保消息已添加到DOM中
+        if (saveTicketResult && saveTicketResult.cguid) {
+          addTicketLinkListener(saveTicketResult.cguid);
+        }
+      });
+    } else {
+      confirmBtnDisabled.value = false;
+      confirmBtnText.value = "生单失败";
+    }
+  }
 };
 
-const addTicketLinkListener = (ticketId: string) => {
-  const link = document.querySelector(`#ticket-${ticketId}`);
-  if (link) {
-    // 移除旧的监听器（如果存在）
-    if (ticketLinkListener.value) {
-      link.removeEventListener("click", ticketLinkListener.value);
+// 添加一个新的函数来实现重试机制
+const tryAddTicketLinkListener = (
+  ticketId: string,
+  maxAttempts = 10,
+  interval = 50
+) => {
+  let attempts = 0;
+
+  const tryAttach = () => {
+    const link = document.querySelector(`#ticket-${ticketId}`);
+    if (link) {
+      // 找到元素，添加监听器
+      if (ticketLinkListener.value) {
+        link.removeEventListener("click", ticketLinkListener.value);
+      }
+      ticketLinkListener.value = handleTicketClick;
+      link.addEventListener("click", ticketLinkListener.value);
+      return true; // 成功添加
+    } else if (attempts < maxAttempts) {
+      // 还未找到元素，且未达到最大尝试次数，继续尝试
+      attempts++;
+      setTimeout(tryAttach, interval);
+      return false; // 尚未添加成功
     }
-    // 创建新的监听器函数
-    ticketLinkListener.value = handleTicketClick;
-    link.addEventListener("click", ticketLinkListener.value);
-  }
+    return false; // 达到最大尝试次数，放弃
+  };
+
+  return tryAttach();
+};
+
+// 修改addTicketLinkListener函数使用新的重试机制
+const addTicketLinkListener = (ticketId: string) => {
+  // 使用重试机制添加事件监听器
+  tryAddTicketLinkListener(ticketId);
 };
 
 const handleTicketClick = (event: Event) => {
@@ -275,6 +317,16 @@ onMounted(() => {
       messageContent.value.templateJson,
       messageContent.value.formData
     );
+  }
+
+  // Check if this is a saved ticket with a GUID and attach listeners to any existing links
+  if (
+    messageContent.value.saveTicketResult &&
+    messageContent.value.formData?.cguid
+  ) {
+    nextTick(() => {
+      addTicketLinkListener(messageContent.value.formData.cguid);
+    });
   }
 });
 
